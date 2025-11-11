@@ -2,138 +2,99 @@ import streamlit as st
 import sqlite3
 import uuid
 import time
-import random
+import json
 from datetime import datetime
 
-# Initialize database - FIXED VERSION
-def init_database():
-    """Initialize the database with required tables"""
+# Set page config first
+st.set_page_config(
+    page_title="Quiz Application",
+    page_icon="🧠",
+    layout="wide"
+)
+
+# SIMPLE DATABASE SOLUTION
+def get_db_connection():
+    """Get database connection with automatic table creation"""
+    conn = sqlite3.connect('quiz_app.db', check_same_thread=False)
+    cursor = conn.cursor()
+    
+    # Create table if it doesn't exist - SIMPLIFIED
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS quiz_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            category TEXT,
+            difficulty TEXT,
+            score INTEGER,
+            total_questions INTEGER,
+            percentage REAL,
+            time_taken REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    conn.commit()
+    return conn
+
+def save_quiz_result(user_id, category, difficulty, score, total_questions, percentage, time_taken):
+    """Save quiz result - SIMPLIFIED"""
     try:
-        conn = sqlite3.connect('quiz_app.db', check_same_thread=False)
+        conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Create quiz_results table if it doesn't exist
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS quiz_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                category TEXT NOT NULL,
-                difficulty TEXT NOT NULL,
-                score INTEGER NOT NULL,
-                total_questions INTEGER NOT NULL,
-                percentage REAL NOT NULL,
-                time_taken REAL NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+            INSERT INTO quiz_results 
+            (user_id, category, difficulty, score, total_questions, percentage, time_taken)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (user_id, category, difficulty, score, total_questions, percentage, time_taken))
         
         conn.commit()
         conn.close()
-        st.success("✅ Database initialized successfully")
-    except sqlite3.Error as e:
-        st.error(f"❌ Database initialization error: {e}")
+        return True
+    except Exception as e:
+        st.error(f"Error saving result: {e}")
+        return False
 
-# Enhanced Database Manager Class
-class QuizDatabase:
-    def __init__(self, db_path='quiz_app.db'):
-        self.db_path = db_path
-        self._ensure_table_exists()
-    
-    def _ensure_table_exists(self):
-        """Ensure the table exists before any operation"""
-        try:
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS quiz_results (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    difficulty TEXT NOT NULL,
-                    score INTEGER NOT NULL,
-                    total_questions INTEGER NOT NULL,
-                    percentage REAL NOT NULL,
-                    time_taken REAL NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            conn.commit()
-            conn.close()
-        except sqlite3.Error as e:
-            print(f"Table creation error: {e}")
-    
-    def save_quiz_result(self, user_id, category, difficulty, score, total_questions, percentage, time_taken):
-        """Save quiz result to database"""
-        try:
-            # Ensure table exists before insert
-            self._ensure_table_exists()
-            
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                INSERT INTO quiz_results (user_id, category, difficulty, score, total_questions, percentage, time_taken)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (user_id, category, difficulty, score, total_questions, percentage, time_taken))
-            
-            conn.commit()
-            conn.close()
-            return True
-        except sqlite3.Error as e:
-            st.error(f"❌ Database save error: {e}")
-            return False
-    
-    def get_user_results(self, user_id):
-        """Get all quiz results for a user"""
-        try:
-            self._ensure_table_exists()
-            
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT * FROM quiz_results 
-                WHERE user_id = ? 
-                ORDER BY created_at DESC
-            ''', (user_id,))
-            
-            results = cursor.fetchall()
-            conn.close()
-            
-            # Convert to list of dictionaries
-            columns = ['id', 'user_id', 'category', 'difficulty', 'score', 
-                      'total_questions', 'percentage', 'time_taken', 'created_at']
-            return [dict(zip(columns, row)) for row in results]
-        except sqlite3.Error as e:
-            st.error(f"❌ Database fetch error: {e}")
-            return []
-    
-    def get_user_average_score(self, user_id):
-        """Get average score for a user"""
-        try:
-            self._ensure_table_exists()
-            
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT AVG(percentage) FROM quiz_results 
-                WHERE user_id = ?
-            ''', (user_id,))
-            
-            result = cursor.fetchone()
-            conn.close()
-            return result[0] if result and result[0] else 0.0
-        except sqlite3.Error as e:
-            st.error(f"❌ Database average error: {e}")
-            return 0.0
+def get_user_results(user_id):
+    """Get user results - SIMPLIFIED"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT * FROM quiz_results 
+            WHERE user_id = ? 
+            ORDER BY created_at DESC
+        ''', (user_id,))
+        
+        results = cursor.fetchall()
+        conn.close()
+        
+        # Convert to list of dictionaries
+        columns = ['id', 'user_id', 'category', 'difficulty', 'score', 
+                  'total_questions', 'percentage', 'time_taken', 'created_at']
+        return [dict(zip(columns, row)) for row in results]
+    except Exception as e:
+        st.error(f"Error getting results: {e}")
+        return []
 
-# Initialize database instance
-db = QuizDatabase()
+def get_user_average_score(user_id):
+    """Get average score - SIMPLIFIED"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT AVG(percentage) FROM quiz_results WHERE user_id = ?
+        ''', (user_id,))
+        
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result and result[0] else 0.0
+    except Exception as e:
+        return 0.0
 
-# Quiz questions database (keep your existing questions here)
+# Quiz questions database
 QUIZ_QUESTIONS = {
     "Mathematics": {
         "Easy": [
@@ -142,32 +103,143 @@ QUIZ_QUESTIONS = {
                 "options": ["3", "4", "5", "6"],
                 "correct_answer": "4"
             },
-            # ... keep your existing questions
+            {
+                "question": "What is 5 × 3?",
+                "options": ["10", "15", "20", "25"],
+                "correct_answer": "15"
+            },
+            {
+                "question": "What is 10 ÷ 2?",
+                "options": ["2", "5", "10", "20"],
+                "correct_answer": "5"
+            }
         ],
-        # ... other difficulties and categories
+        "Medium": [
+            {
+                "question": "What is 12 × 12?",
+                "options": ["121", "144", "132", "156"],
+                "correct_answer": "144"
+            },
+            {
+                "question": "What is 45 ÷ 9?",
+                "options": ["4", "5", "6", "7"],
+                "correct_answer": "5"
+            }
+        ],
+        "Hard": [
+            {
+                "question": "What is 15% of 200?",
+                "options": ["15", "20", "25", "30"],
+                "correct_answer": "30"
+            },
+            {
+                "question": "What is the square root of 169?",
+                "options": ["11", "12", "13", "14"],
+                "correct_answer": "13"
+            }
+        ]
+    },
+    "Science": {
+        "Easy": [
+            {
+                "question": "What planet is known as the Red Planet?",
+                "options": ["Venus", "Mars", "Jupiter", "Saturn"],
+                "correct_answer": "Mars"
+            },
+            {
+                "question": "What is H₂O?",
+                "options": ["Oxygen", "Hydrogen", "Water", "Carbon Dioxide"],
+                "correct_answer": "Water"
+            }
+        ],
+        "Medium": [
+            {
+                "question": "What is the chemical symbol for gold?",
+                "options": ["Go", "Gd", "Au", "Ag"],
+                "correct_answer": "Au"
+            }
+        ],
+        "Hard": [
+            {
+                "question": "What is the atomic number of carbon?",
+                "options": ["6", "8", "12", "14"],
+                "correct_answer": "6"
+            }
+        ]
+    },
+    "English": {
+        "Easy": [
+            {
+                "question": "Which word is a noun?",
+                "options": ["run", "beautiful", "quickly", "cat"],
+                "correct_answer": "cat"
+            }
+        ],
+        "Medium": [
+            {
+                "question": "What is a synonym for 'happy'?",
+                "options": ["sad", "joyful", "angry", "tired"],
+                "correct_answer": "joyful"
+            }
+        ],
+        "Hard": [
+            {
+                "question": "What is an oxymoron?",
+                "options": [
+                    "A figure of speech with contradictory terms",
+                    "A type of poem", 
+                    "A grammatical error",
+                    "A spelling mistake"
+                ],
+                "correct_answer": "A figure of speech with contradictory terms"
+            }
+        ]
+    },
+    "General Knowledge": {
+        "Easy": [
+            {
+                "question": "What is the capital of France?",
+                "options": ["London", "Berlin", "Paris", "Madrid"],
+                "correct_answer": "Paris"
+            }
+        ],
+        "Medium": [
+            {
+                "question": "Who wrote 'Romeo and Juliet'?",
+                "options": ["Charles Dickens", "William Shakespeare", "Jane Austen", "Mark Twain"],
+                "correct_answer": "William Shakespeare"
+            }
+        ],
+        "Hard": [
+            {
+                "question": "Who discovered penicillin?",
+                "options": ["Marie Curie", "Alexander Fleming", "Louis Pasteur", "Robert Koch"],
+                "correct_answer": "Alexander Fleming"
+            }
+        ]
     }
-    # ... other categories
 }
 
 def show_dashboard():
     """Display the main dashboard"""
     st.title("🎯 Your Learning Journey")
     
-    # Initialize database on dashboard load
-    init_database()
+    # Initialize session state
+    if 'user_id' not in st.session_state:
+        st.session_state.user_id = str(uuid.uuid4())
     
     # User stats
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("Total Quizzes")
-        user_results = db.get_user_results(st.session_state.user_id)
+        user_results = get_user_results(st.session_state.user_id)
         total_quizzes = len(user_results)
         st.metric("Quizzes Taken", total_quizzes)
     
     with col2:
         st.subheader("Average Score")
-        avg_score = db.get_user_average_score(st.session_state.user_id)
+        avg_score = get_user_average_score(st.session_state.user_id)
         st.metric("Performance", f"{avg_score:.1f}%" if avg_score else "0%")
     
     st.markdown("---")
@@ -185,7 +257,6 @@ def show_dashboard():
         with col:
             if st.button(f"{icon}\n{category}", use_container_width=True, key=f"cat_{i}"):
                 st.session_state.selected_category = category
-                st.session_state.selected_difficulty = "Medium"  # Default difficulty
                 st.session_state.page = 'quiz'
                 st.rerun()
     
@@ -195,31 +266,28 @@ def show_dashboard():
     st.subheader("📈 Recent Performance")
     
     if user_results:
-        # Display last 5 results
-        recent_results = user_results[:5]
-        for result in recent_results:
+        for result in user_results[:3]:  # Show last 3 results
             with st.container():
                 col1, col2, col3 = st.columns([2, 1, 1])
                 
                 with col1:
-                    category = result.get('category', 'Unknown Category')
-                    difficulty = result.get('difficulty', 'Unknown Difficulty')
+                    category = result.get('category', 'General')
+                    difficulty = result.get('difficulty', 'Medium')
                     st.write(f"**{category}** - {difficulty}")
                 
                 with col2:
                     score = result.get('score', 0)
                     total = result.get('total_questions', 0)
-                    percentage = result.get('percentage', 0)
                     st.write(f"Score: {score}/{total}")
                 
                 with col3:
-                    # Performance indicator
+                    percentage = result.get('percentage', 0)
                     if percentage >= 80:
-                        st.success(f"{percentage:.1f}% 🎉")
+                        st.success(f"{percentage:.1f}%")
                     elif percentage >= 60:
-                        st.warning(f"{percentage:.1f}% 👍")
+                        st.warning(f"{percentage:.1f}%")
                     else:
-                        st.error(f"{percentage:.1f}% 💪")
+                        st.error(f"{percentage:.1f}%")
                 
                 st.divider()
     else:
@@ -240,11 +308,9 @@ def show_quiz():
         st.session_state.selected_difficulty = "Medium"
     if 'selected_category' not in st.session_state:
         st.session_state.selected_category = "Mathematics"
-    if 'quiz_questions' not in st.session_state:
-        st.session_state.quiz_questions = []
     
     # Category and difficulty selection at start
-    if st.session_state.current_question == 0 and not st.session_state.user_answers:
+    if st.session_state.current_question == 0 and len(st.session_state.user_answers) == 0:
         col1, col2 = st.columns(2)
         
         with col1:
@@ -264,18 +330,15 @@ def show_quiz():
             st.session_state.selected_difficulty = difficulty
         
         if st.button("Start Quiz", type="primary"):
-            # Ensure database is initialized before starting quiz
-            init_database()
+            # Load questions
+            category = st.session_state.selected_category
+            difficulty = st.session_state.selected_difficulty
             
-            # Load questions for selected category and difficulty
             if category in QUIZ_QUESTIONS and difficulty in QUIZ_QUESTIONS[category]:
                 st.session_state.quiz_questions = QUIZ_QUESTIONS[category][difficulty]
-                st.session_state.current_question = 0
-                st.session_state.user_answers = []
-                st.session_state.start_time = time.time()
                 st.rerun()
             else:
-                st.error("❌ No questions available for this category and difficulty.")
+                st.error("No questions available for this selection.")
         
         if st.button("← Back to Dashboard"):
             st.session_state.page = 'dashboard'
@@ -314,11 +377,11 @@ def show_quiz():
                 st.rerun()
     
     else:
-        # All questions answered - show results
+        # All questions answered - submit quiz
         submit_quiz()
 
 def submit_quiz():
-    """Calculate and display quiz results, save to database"""
+    """Calculate and display quiz results"""
     try:
         questions = st.session_state.quiz_questions
         user_answers = st.session_state.user_answers
@@ -330,7 +393,7 @@ def submit_quiz():
                 score += 1
         
         total_questions = len(questions)
-        percentage = (score / total_questions) * 100 if total_questions > 0 else 0
+        percentage = (score / total_questions) * 100
         time_taken = time.time() - st.session_state.start_time
         
         # Display results
@@ -355,8 +418,8 @@ def submit_quiz():
         else:
             st.info("💪 Keep trying! You'll get better!")
         
-        # Save to database with error handling
-        success = db.save_quiz_result(
+        # Save to database
+        success = save_quiz_result(
             st.session_state.user_id,
             st.session_state.selected_category,
             st.session_state.selected_difficulty,
@@ -369,42 +432,30 @@ def submit_quiz():
         if success:
             st.success("✅ Results saved successfully!")
         else:
-            st.error("❌ Failed to save results to database.")
+            st.warning("⚠️ Results not saved, but you can still see your score.")
         
-        # Show review of answers
+        # Show review
         st.markdown("---")
         st.subheader("📋 Review Your Answers")
         
         for i, question in enumerate(questions):
-            with st.container():
-                user_answer = user_answers[i] if i < len(user_answers) else "Not answered"
-                correct = user_answer == question['correct_answer']
-                
-                st.write(f"**Q{i+1}: {question['question']}**")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.write(f"Your answer: {user_answer}")
-                
-                with col2:
-                    if correct:
-                        st.success("✅ Correct!")
-                    else:
-                        st.error(f"❌ Correct answer: {question['correct_answer']}")
-                
-                st.divider()
+            user_answer = user_answers[i] if i < len(user_answers) else "Not answered"
+            correct = user_answer == question['correct_answer']
+            
+            st.write(f"**Q{i+1}: {question['question']}**")
+            st.write(f"Your answer: {user_answer}")
+            if correct:
+                st.success("✅ Correct!")
+            else:
+                st.error(f"❌ Correct answer: {question['correct_answer']}")
+            st.divider()
         
-        # Navigation buttons
+        # Navigation
         col1, col2, col3 = st.columns(3)
         
         with col1:
             if st.button("🔄 Take Another Quiz", use_container_width=True):
-                # Reset quiz state
-                st.session_state.current_question = 0
-                st.session_state.user_answers = []
-                st.session_state.start_time = time.time()
-                st.session_state.quiz_questions = []
+                reset_quiz_state()
                 st.rerun()
         
         with col2:
@@ -413,30 +464,34 @@ def submit_quiz():
                 st.rerun()
         
         with col3:
-            if st.button("🏠 Back to Dashboard", use_container_width=True):
+            if st.button("🏠 Dashboard", use_container_width=True):
                 st.session_state.page = 'dashboard'
                 st.rerun()
                 
     except Exception as e:
-        st.error(f"❌ An error occurred while submitting the quiz: {e}")
+        st.error(f"Error in quiz submission: {e}")
         if st.button("🏠 Back to Dashboard"):
             st.session_state.page = 'dashboard'
             st.rerun()
+
+def reset_quiz_state():
+    """Reset quiz state"""
+    st.session_state.current_question = 0
+    st.session_state.user_answers = []
+    st.session_state.start_time = time.time()
+    if 'quiz_questions' in st.session_state:
+        del st.session_state.quiz_questions
 
 def show_results():
     """Display user's quiz results history"""
     st.title("📊 My Quiz Results")
     
-    # Ensure database is initialized
-    init_database()
-    
     # Get user results
-    results = db.get_user_results(st.session_state.user_id)
+    results = get_user_results(st.session_state.user_id)
     
     if results:
         st.subheader("Your Quiz History")
         
-        # Display results in an expandable format
         for i, result in enumerate(results):
             with st.expander(f"Quiz {i+1} - {result.get('category', 'General')} ({result.get('difficulty', 'Medium')})", expanded=i==0):
                 col1, col2, col3, col4 = st.columns(4)
@@ -448,12 +503,7 @@ def show_results():
                 with col2:
                     st.write("**Percentage**")
                     percentage = result.get('percentage', 0)
-                    if percentage >= 80:
-                        st.success(f"{percentage:.1f}%")
-                    elif percentage >= 60:
-                        st.warning(f"{percentage:.1f}%")
-                    else:
-                        st.error(f"{percentage:.1f}%")
+                    st.write(f"{percentage:.1f}%")
                 
                 with col3:
                     st.write("**Time Taken**")
@@ -461,11 +511,8 @@ def show_results():
                 
                 with col4:
                     st.write("**Date**")
-                    created_at = result.get('created_at', 'Unknown')
-                    if created_at != 'Unknown':
-                        st.write(created_at[:16] if len(created_at) >= 16 else created_at)
-                    else:
-                        st.write("N/A")
+                    created_at = result.get('created_at', '')
+                    st.write(created_at[:16] if created_at else 'N/A')
         
         # Statistics
         st.markdown("---")
@@ -474,15 +521,14 @@ def show_results():
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            total_quizzes = len(results)
-            st.metric("Total Quizzes", total_quizzes)
+            st.metric("Total Quizzes", len(results))
         
         with col2:
-            avg_score = db.get_user_average_score(st.session_state.user_id)
-            st.metric("Average Score", f"{avg_score:.1f}%" if avg_score else "0%")
+            avg_score = get_user_average_score(st.session_state.user_id)
+            st.metric("Average Score", f"{avg_score:.1f}%")
         
         with col3:
-            best_score = max([r.get('percentage', 0) for r in results]) if results else 0
+            best_score = max([r.get('percentage', 0) for r in results])
             st.metric("Best Score", f"{best_score:.1f}%")
     
     else:
@@ -502,21 +548,18 @@ def show_results():
             st.rerun()
     
     with col2:
-        if st.button("🏠 Back to Dashboard", use_container_width=True):
+        if st.button("🏠 Dashboard", use_container_width=True):
             st.session_state.page = 'dashboard'
             st.rerun()
 
 def main():
     """Main application function"""
-    # Initialize database at app start
-    init_database()
-    
-    # Initialize session state
-    if 'user_id' not in st.session_state:
-        st.session_state.user_id = str(uuid.uuid4())
-    
+    # Initialize page
     if 'page' not in st.session_state:
         st.session_state.page = 'dashboard'
+    
+    if 'user_id' not in st.session_state:
+        st.session_state.user_id = str(uuid.uuid4())
     
     # Page navigation
     if st.session_state.page == 'dashboard':
