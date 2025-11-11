@@ -15,7 +15,7 @@ st.set_page_config(
 
 # Database initialization
 def init_db():
-    conn = sqlite3.connect('quiz.db')
+    conn = sqlite3.connect('quiz.db', check_same_thread=False)
     c = conn.cursor()
     
     c.execute('''
@@ -47,7 +47,7 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def get_db_connection():
-    conn = sqlite3.connect('quiz.db')
+    conn = sqlite3.connect('quiz.db', check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -90,6 +90,8 @@ if 'user_id' not in st.session_state:
     st.session_state.user_id = None
 if 'username' not in st.session_state:
     st.session_state.username = None
+if 'page' not in st.session_state:
+    st.session_state.page = "login"  # Default page
 if 'quiz_started' not in st.session_state:
     st.session_state.quiz_started = False
 if 'current_question' not in st.session_state:
@@ -130,12 +132,12 @@ def login_user(username, password):
 
 # Page functions
 def show_login():
-    st.title("🔐 Login")
+    st.title("🔐 Login to Quiz App")
     
     with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submit = st.form_submit_button("Login")
+        username = st.text_input("Username", placeholder="Enter your username")
+        password = st.text_input("Password", type="password", placeholder="Enter your password")
+        submit = st.form_submit_button("Login", use_container_width=True)
         
         if submit:
             if username and password:
@@ -143,48 +145,51 @@ def show_login():
                 if success:
                     st.session_state.user_id = result['id']
                     st.session_state.username = result['username']
-                    st.success("Login successful!")
+                    st.session_state.page = "dashboard"  # IMPORTANT: Set page to dashboard
+                    st.success("✅ Login successful! Redirecting...")
                     time.sleep(1)
                     st.rerun()
                 else:
-                    st.error(result)
+                    st.error(f"❌ {result}")
             else:
-                st.error("Please fill in all fields")
+                st.error("⚠️ Please fill in all fields")
     
+    st.markdown("---")
     st.write("Don't have an account?")
-    if st.button("Register here"):
+    if st.button("Register here", use_container_width=True):
         st.session_state.page = "register"
         st.rerun()
 
 def show_register():
-    st.title("📝 Register")
+    st.title("📝 Create Account")
     
     with st.form("register_form"):
-        username = st.text_input("Username")
-        email = st.text_input("Email (optional)")
-        password = st.text_input("Password", type="password")
-        confirm_password = st.text_input("Confirm Password", type="password")
-        submit = st.form_submit_button("Register")
+        username = st.text_input("Username", placeholder="Choose a username")
+        email = st.text_input("Email (optional)", placeholder="your@email.com")
+        password = st.text_input("Password", type="password", placeholder="Enter password (min 4 characters)")
+        confirm_password = st.text_input("Confirm Password", type="password", placeholder="Confirm your password")
+        submit = st.form_submit_button("Register", use_container_width=True)
         
         if submit:
             if not username or not password:
-                st.error("Please fill in all required fields")
+                st.error("⚠️ Please fill in all required fields")
             elif password != confirm_password:
-                st.error("Passwords don't match!")
+                st.error("❌ Passwords don't match!")
             elif len(password) < 4:
-                st.error("Password must be at least 4 characters!")
+                st.error("❌ Password must be at least 4 characters!")
             else:
                 success, message = register_user(username, password, email)
                 if success:
-                    st.success(message)
-                    st.session_state.page = "login"
-                    time.sleep(1)
+                    st.success(f"✅ {message} Redirecting to login...")
+                    st.session_state.page = "login"  # Go to login after registration
+                    time.sleep(2)
                     st.rerun()
                 else:
-                    st.error(message)
+                    st.error(f"❌ {message}")
     
+    st.markdown("---")
     st.write("Already have an account?")
-    if st.button("Login here"):
+    if st.button("Login here", use_container_width=True):
         st.session_state.page = "login"
         st.rerun()
 
@@ -210,6 +215,7 @@ def show_dashboard():
     conn.close()
     
     # Stats columns
+    st.subheader("📊 Your Statistics")
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Total Quizzes", stats['total_quizzes'])
@@ -218,16 +224,13 @@ def show_dashboard():
     with col3:
         st.metric("Total Points", stats['total_score'])
     
-    # Actions
-    st.subheader("Quick Actions")
-    col1, col2, col3 = st.columns(3)
+    # Quick Actions
+    st.subheader("🚀 Quick Actions")
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        if st.button("🎮 Start New Quiz", use_container_width=True):
-            st.session_state.quiz_started = True
-            st.session_state.current_question = 0
-            st.session_state.user_answers = {}
-            st.session_state.quiz_start_time = time.time()
+        if st.button("🎮 Start Quiz", use_container_width=True):
+            st.session_state.page = "quiz"
             st.rerun()
     
     with col2:
@@ -240,53 +243,76 @@ def show_dashboard():
             st.session_state.page = "profile"
             st.rerun()
     
+    with col4:
+        if st.button("💬 Feedback", use_container_width=True):
+            st.session_state.page = "feedback"
+            st.rerun()
+    
     # Recent results
+    st.subheader("📈 Recent Quiz Results")
     if recent_results:
-        st.subheader("Recent Quiz Results")
         for result in recent_results:
             with st.container():
                 col1, col2, col3, col4 = st.columns([2,1,1,1])
                 with col1:
                     st.write(f"**{result['created_at'][:16]}**")
                 with col2:
-                    st.write(f"Score: {result['score']}/{result['total_questions']}")
+                    st.write(f"Score: **{result['score']}/{result['total_questions']}**")
                 with col3:
-                    st.write(f"Percentage: {result['percentage']:.1f}%")
+                    percentage = result['percentage']
+                    if percentage >= 80:
+                        emoji = "🎉"
+                    elif percentage >= 60:
+                        emoji = "👍"
+                    else:
+                        emoji = "💪"
+                    st.write(f"{emoji} **{percentage:.1f}%**")
                 with col4:
-                    st.write(f"Time: {result['time_taken']:.1f}s")
+                    st.write(f"⏱️ **{result['time_taken']:.1f}s**")
                 st.divider()
     else:
-        st.info("No quiz results yet. Start your first quiz!")
+        st.info("No quiz results yet. Start your first quiz from the Quick Actions above!")
     
-    # Logout
-    st.sidebar.write("---")
-    if st.sidebar.button("🚪 Logout"):
+    # Logout in sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.write(f"Logged in as: **{st.session_state.username}**")
+    if st.sidebar.button("🚪 Logout", use_container_width=True):
         st.session_state.user_id = None
         st.session_state.username = None
         st.session_state.page = "login"
         st.rerun()
 
 def show_quiz():
-    st.title("📝 Quiz")
+    st.title("📝 Quiz Challenge")
     
     if not st.session_state.quiz_started:
-        st.info("Click the button below to start the quiz!")
-        if st.button("Start Quiz"):
-            st.session_state.quiz_started = True
-            st.session_state.current_question = 0
-            st.session_state.user_answers = {}
-            st.session_state.quiz_start_time = time.time()
-            st.rerun()
+        st.info("Ready to test your knowledge? Click the button below to start the quiz!")
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("🎯 Start Quiz", use_container_width=True):
+                st.session_state.quiz_started = True
+                st.session_state.current_question = 0
+                st.session_state.user_answers = {}
+                st.session_state.quiz_start_time = time.time()
+                st.rerun()
+        with col2:
+            if st.button("🏠 Back to Dashboard", use_container_width=True):
+                st.session_state.page = "dashboard"
+                st.rerun()
         return
     
-    # Timer
+    # Timer and progress
     elapsed_time = time.time() - st.session_state.quiz_start_time
-    st.write(f"⏰ Time: {int(elapsed_time // 60)}m {int(elapsed_time % 60)}s")
+    minutes = int(elapsed_time // 60)
+    seconds = int(elapsed_time % 60)
     
-    # Progress
-    progress = (st.session_state.current_question + 1) / len(quiz_questions)
-    st.progress(progress)
-    st.write(f"Question {st.session_state.current_question + 1} of {len(quiz_questions)}")
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.write(f"⏰ **Time Elapsed:** {minutes}m {seconds}s")
+    with col2:
+        progress = (st.session_state.current_question + 1) / len(quiz_questions)
+        st.progress(progress)
+        st.write(f"**Question {st.session_state.current_question + 1} of {len(quiz_questions)}**")
     
     # Current question
     question = quiz_questions[st.session_state.current_question]
@@ -295,34 +321,37 @@ def show_quiz():
     
     # Options
     selected_option = st.radio(
-        "Choose your answer:",
+        "Select your answer:",
         question['options'],
-        key=f"question_{question['id']}"
+        key=f"question_{question['id']}",
+        index=None
     )
     
-    # Navigation
+    # Navigation buttons
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col1:
         if st.session_state.current_question > 0:
-            if st.button("⬅️ Previous"):
-                st.session_state.user_answers[question['id']] = question['options'].index(selected_option) + 1
+            if st.button("⬅️ Previous", use_container_width=True):
+                if selected_option:
+                    st.session_state.user_answers[question['id']] = question['options'].index(selected_option) + 1
                 st.session_state.current_question -= 1
                 st.rerun()
     
     with col3:
         if st.session_state.current_question < len(quiz_questions) - 1:
-            if st.button("Next ➡️"):
+            if st.button("Next ➡️", use_container_width=True, disabled=selected_option is None):
                 st.session_state.user_answers[question['id']] = question['options'].index(selected_option) + 1
                 st.session_state.current_question += 1
                 st.rerun()
         else:
-            if st.button("✅ Submit Quiz"):
+            if st.button("✅ Submit Quiz", use_container_width=True, disabled=selected_option is None):
                 st.session_state.user_answers[question['id']] = question['options'].index(selected_option) + 1
                 submit_quiz()
     
     # Back to dashboard
-    if st.button("🏠 Back to Dashboard"):
+    st.markdown("---")
+    if st.button("🏠 Back to Dashboard", use_container_width=True):
         st.session_state.quiz_started = False
         st.session_state.page = "dashboard"
         st.rerun()
@@ -348,18 +377,21 @@ def submit_quiz():
     conn.commit()
     conn.close()
     
-    # Show results
+    # Store results in session state
     st.session_state.quiz_started = False
-    st.session_state.page = "quiz_results"
     st.session_state.quiz_score = score
     st.session_state.quiz_total = total_questions
     st.session_state.quiz_percentage = percentage
     st.session_state.quiz_time = time_taken
+    st.session_state.page = "quiz_results"
     st.rerun()
 
 def show_quiz_results():
     st.title("🎉 Quiz Completed!")
     
+    st.balloons()
+    
+    # Results cards
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -370,14 +402,27 @@ def show_quiz_results():
         st.metric("Time Taken", f"{st.session_state.quiz_time:.1f}s")
     with col4:
         if st.session_state.quiz_percentage >= 80:
-            st.metric("Performance", "🎉 Excellent")
+            performance = "🎉 Excellent"
+            st.metric("Performance", performance)
         elif st.session_state.quiz_percentage >= 60:
-            st.metric("Performance", "👍 Good")
+            performance = "👍 Good"
+            st.metric("Performance", performance)
         else:
-            st.metric("Performance", "💪 Keep Trying")
+            performance = "💪 Keep Trying"
+            st.metric("Performance", performance)
     
-    st.balloons()
+    # Performance message
+    if st.session_state.quiz_percentage == 100:
+        st.success("🏆 Perfect score! You're a quiz master!")
+    elif st.session_state.quiz_percentage >= 80:
+        st.success("🎯 Excellent work! You really know your stuff!")
+    elif st.session_state.quiz_percentage >= 60:
+        st.info("👍 Good job! Keep practicing to improve!")
+    else:
+        st.warning("💪 Don't give up! Practice makes perfect!")
     
+    # Action buttons
+    st.markdown("---")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("📊 View All Results", use_container_width=True):
@@ -389,7 +434,7 @@ def show_quiz_results():
             st.rerun()
 
 def show_results():
-    st.title("📊 My Results")
+    st.title("📊 My Quiz Results")
     
     conn = get_db_connection()
     results = conn.execute('''
@@ -400,24 +445,38 @@ def show_results():
     conn.close()
     
     if results:
-        for result in results:
+        st.write(f"**Total attempts:** {len(results)}")
+        
+        for i, result in enumerate(results):
             with st.container():
-                col1, col2, col3, col4 = st.columns([2,1,1,1])
+                col1, col2, col3, col4, col5 = st.columns([2,1,1,1,1])
                 with col1:
-                    st.write(f"**{result['created_at'][:16]}**")
+                    st.write(f"**Attempt #{i+1}** - {result['created_at'][:16]}")
                 with col2:
-                    st.write(f"Score: {result['score']}/{result['total_questions']}")
+                    st.write(f"**{result['score']}/{result['total_questions']}**")
                 with col3:
                     percentage = result['percentage']
-                    color = "🟢" if percentage >= 80 else "🟡" if percentage >= 60 else "🔴"
-                    st.write(f"{color} {percentage:.1f}%")
+                    if percentage >= 80:
+                        color = "🟢"
+                    elif percentage >= 60:
+                        color = "🟡"
+                    else:
+                        color = "🔴"
+                    st.write(f"{color} **{percentage:.1f}%**")
                 with col4:
-                    st.write(f"⏱️ {result['time_taken']:.1f}s")
+                    st.write(f"⏱️ **{result['time_taken']:.1f}s**")
+                with col5:
+                    if percentage >= 80:
+                        st.write("🎉 Excellent")
+                    elif percentage >= 60:
+                        st.write("👍 Good")
+                    else:
+                        st.write("💪 Practice")
                 st.divider()
     else:
-        st.info("No quiz results yet. Take your first quiz!")
+        st.info("No quiz results yet. Take your first quiz from the dashboard!")
     
-    if st.button("🏠 Back to Dashboard"):
+    if st.button("🏠 Back to Dashboard", use_container_width=True):
         st.session_state.page = "dashboard"
         st.rerun()
 
@@ -442,14 +501,16 @@ def show_profile():
     col1, col2 = st.columns([1, 2])
     
     with col1:
-        st.subheader("User Information")
-        st.write(f"**Username:** {user['username']}")
-        st.write(f"**Email:** {user['email'] or 'Not provided'}")
-        st.write(f"**Member since:** {user['created_at'][:10]}")
-        st.write(f"**User ID:** #{user['id']}")
+        st.subheader("👤 User Information")
+        st.info(f"""
+        **Username:** {user['username']}  
+        **Email:** {user['email'] or 'Not provided'}  
+        **Member since:** {user['created_at'][:10]}  
+        **User ID:** #{user['id']}
+        """)
     
     with col2:
-        st.subheader("Quiz Statistics")
+        st.subheader("📈 Quiz Statistics")
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Total Quizzes", stats['total_quizzes'])
@@ -457,29 +518,66 @@ def show_profile():
             st.metric("Average Score", f"{stats['avg_percentage']:.1f}%")
         with col3:
             st.metric("Total Points", stats['total_score'])
+        
+        # Performance indicator
+        st.subheader("🎯 Performance Level")
+        avg_score = stats['avg_percentage']
+        if avg_score >= 80:
+            st.success("🏆 Quiz Master - Excellent performance!")
+        elif avg_score >= 60:
+            st.info("🎯 Pro Learner - Good job!")
+        elif avg_score > 0:
+            st.warning("🚀 Rising Star - Keep practicing!")
+        else:
+            st.info("🌟 New Explorer - Start your first quiz!")
     
-    if st.button("🏠 Back to Dashboard"):
+    if st.button("🏠 Back to Dashboard", use_container_width=True):
+        st.session_state.page = "dashboard"
+        st.rerun()
+
+def show_feedback():
+    st.title("💬 Feedback")
+    
+    st.info("We value your feedback! Please let us know how we can improve your quiz experience.")
+    
+    with st.form("feedback_form"):
+        rating = st.slider("How would you rate our quiz application?", 1, 5, 3)
+        comments = st.text_area("Your comments or suggestions:", placeholder="What did you like? What can we improve?")
+        
+        if st.form_submit_button("Submit Feedback", use_container_width=True):
+            st.success("Thank you for your feedback! We appreciate your input.")
+            time.sleep(2)
+            st.session_state.page = "dashboard"
+            st.rerun()
+    
+    if st.button("🏠 Back to Dashboard", use_container_width=True):
         st.session_state.page = "dashboard"
         st.rerun()
 
 # Main app logic
 def main():
+    # Initialize database
     init_db()
     
-    # Initialize page state
-    if 'page' not in st.session_state:
-        if st.session_state.user_id:
-            st.session_state.page = "dashboard"
-        else:
-            st.session_state.page = "login"
+    # Debug info (remove in production)
+    st.sidebar.markdown("---")
+    st.sidebar.write("**Debug Info:**")
+    st.sidebar.write(f"Page: {st.session_state.page}")
+    st.sidebar.write(f"User: {st.session_state.username}")
     
-    # Page routing
+    # Page routing - FIXED: This ensures proper page display
     if st.session_state.user_id is None:
+        # User not logged in
         if st.session_state.page == "login":
             show_login()
         elif st.session_state.page == "register":
             show_register()
+        else:
+            # Default to login if somehow on wrong page
+            st.session_state.page = "login"
+            show_login()
     else:
+        # User is logged in
         if st.session_state.page == "dashboard":
             show_dashboard()
         elif st.session_state.page == "quiz":
@@ -490,6 +588,12 @@ def main():
             show_results()
         elif st.session_state.page == "profile":
             show_profile()
+        elif st.session_state.page == "feedback":
+            show_feedback()
+        else:
+            # Default to dashboard if page not recognized
+            st.session_state.page = "dashboard"
+            show_dashboard()
 
 if __name__ == "__main__":
     main()
