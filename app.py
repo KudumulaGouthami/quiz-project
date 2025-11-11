@@ -1,573 +1,458 @@
+# app.py -- Advanced Quiz Application (single-file)
+# Requirements: streamlit, sqlite3 (builtin), pandas (optional)
+# Run: pip install streamlit pandas
+# Then: streamlit run app.py
+
 import streamlit as st
 import sqlite3
-import uuid
+import hashlib
 import time
-import json
+import random
+import pandas as pd
 from datetime import datetime
 
-# Set page config first
-st.set_page_config(
-    page_title="Quiz Application",
-    page_icon="🧠",
-    layout="wide"
-)
+st.set_page_config(page_title="Advanced Quiz App", layout="wide", initial_sidebar_state="expanded")
 
-# SIMPLE DATABASE SOLUTION
-def get_db_connection():
-    """Get database connection with automatic table creation"""
-    conn = sqlite3.connect('quiz_app.db', check_same_thread=False)
-    cursor = conn.cursor()
-    
-    # Create table if it doesn't exist - SIMPLIFIED
-    cursor.execute('''
+# -------------------------
+# Styles and animated background
+# -------------------------
+page_bg_css = """
+<style>
+/* Full page gradient background */
+[data-testid="stAppViewContainer"] > .main {
+  background: linear-gradient(120deg, #f6d365 0%, #fda085 50%, #fbc2eb 100%);
+  background-attachment: fixed;
+}
+
+/* Card styling */
+.quiz-card {
+  background: rgba(255,255,255,0.85);
+  padding: 18px;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+}
+
+/* Fancy headings */
+.h1 {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  color: #3b185f;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.6);
+}
+
+/* Button hover */
+.stButton>button:hover { transform: translateY(-2px); }
+
+/* Make sidebar semi-translucent */
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, rgba(255,255,255,0.75), rgba(255,255,255,0.55));
+  border-radius: 12px;
+  padding: 12px;
+}
+
+/* Question box */
+.question-box {
+  background: linear-gradient(90deg, rgba(255,255,255,0.98), rgba(255,255,255,0.9));
+  border-left: 6px solid #ff7eb3;
+  padding: 16px;
+  border-radius: 8px;
+}
+</style>
+"""
+st.markdown(page_bg_css, unsafe_allow_html=True)
+
+# Small header
+st.markdown("<h1 class='h1'>🌟 Advanced Quiz Application</h1>", unsafe_allow_html=True)
+st.markdown("A fun, colorful quiz app with registration, login, categories, difficulty, timer & leaderboard.")
+
+# -------------------------
+# Database helpers
+# -------------------------
+DB_PATH = "quiz_app.db"
+
+def get_conn():
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
+
+def init_db():
+    conn = get_conn()
+    cur = conn.cursor()
+    # users table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            email TEXT UNIQUE,
+            password_hash TEXT,
+            created_at TEXT
+        )
+    ''')
+    # questions table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject TEXT,
+            category TEXT,
+            difficulty TEXT,
+            question TEXT,
+            choices TEXT,    -- stored as JSON-like '|' separated options
+            answer TEXT
+        )
+    ''')
+    # results table
+    cur.execute('''
         CREATE TABLE IF NOT EXISTS quiz_results (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
+            user_id INTEGER,
+            username TEXT,
+            subject TEXT,
             category TEXT,
             difficulty TEXT,
             score INTEGER,
             total_questions INTEGER,
             percentage REAL,
             time_taken REAL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            taken_at TEXT
         )
     ''')
-    
     conn.commit()
-    return conn
+    conn.close()
 
-def save_quiz_result(user_id, category, difficulty, score, total_questions, percentage, time_taken):
-    """Save quiz result - SIMPLIFIED"""
+init_db()
+
+# -------------------------
+# Utility functions
+# -------------------------
+def hash_password(password: str, salt: str = "quiz_salt_v1"):
+    return hashlib.sha256((password + salt).encode("utf-8")).hexdigest()
+
+def register_user(username, email, password):
+    conn = get_conn()
+    cur = conn.cursor()
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO quiz_results 
-            (user_id, category, difficulty, score, total_questions, percentage, time_taken)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (user_id, category, difficulty, score, total_questions, percentage, time_taken))
-        
+        cur.execute("INSERT INTO users (username, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+                    (username, email, hash_password(password), datetime.utcnow().isoformat()))
+        conn.commit()
+        return True, "Registered successfully!"
+    except sqlite3.IntegrityError as e:
+        return False, f"Registration error: {e}"
+    finally:
+        conn.close()
+
+def login_user(username_or_email, password):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, username, email, password_hash FROM users WHERE username = ? OR email = ?",
+                (username_or_email, username_or_email))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        _id, uname, email, pw_hash = row
+        if pw_hash == hash_password(password):
+            return True, {"id": _id, "username": uname, "email": email}
+    return False, "Invalid credentials."
+
+# Seed some sample questions if questions table empty
+def seed_questions_once():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM questions")
+    count = cur.fetchone()[0]
+    if count == 0:
+        sample = [
+            ("Mathematics","Algebra","Easy","What is 2 + 2?","4|3|5|22","4"),
+            ("Mathematics","Algebra","Medium","Solve for x: 2x+3=11","4|3|2|8","4"),
+            ("Science","Physics","Easy","What force keeps us on the ground?","Magnetism|Gravity|Friction|Tension","Gravity"),
+            ("Science","Biology","Hard","Which organelle is the powerhouse of the cell?","Nucleus|Mitochondria|Ribosome|Golgi apparatus","Mitochondria"),
+            ("Computers","Programming","Medium","Which language is primarily used for web pages?","Python|C|JavaScript|Fortran","JavaScript"),
+            ("General Knowledge","History","Easy","Who was the first President of the United States?","Abraham Lincoln|George Washington|Thomas Jefferson|John Adams","George Washington"),
+            ("Anime","Characters","Easy","Which anime features a character named Naruto?","One Piece|Naruto|Bleach|Dragon Ball","Naruto"),
+            ("Anime","Trivia","Medium","In 'My Neighbor Totoro', who are the main child characters?","Satsuki & Mei|Ash & Pikachu|Chihiro & Haku|Edward & Alphonse","Satsuki & Mei"),
+        ]
+        for subj, cat, diff, q, choices, ans in sample:
+            cur.execute("INSERT INTO questions (subject, category, difficulty, question, choices, answer) VALUES (?,?,?,?,?,?)",
+                        (subj, cat, diff, q, choices, ans))
+        conn.commit()
+    conn.close()
+
+seed_questions_once()
+
+# -------------------------
+# Session state initialization
+# -------------------------
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "quiz" not in st.session_state:
+    st.session_state.quiz = {}
+if "answers" not in st.session_state:
+    st.session_state.answers = {}
+if "start_time" not in st.session_state:
+    st.session_state.start_time = None
+
+# -------------------------
+# Sidebar: Login / Register / Profile / Anime clips
+# -------------------------
+with st.sidebar:
+    st.image("https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif", caption="Let's get quizzical!", use_column_width=True)
+    st.markdown("---")
+    if st.session_state.user is None:
+        auth_tab = st.radio("Choose", ["Login", "Register"], index=0)
+        if auth_tab == "Register":
+            st.markdown("### Create account")
+            r_user = st.text_input("Username", key="r_user")
+            r_email = st.text_input("Email", key="r_email")
+            r_pw = st.text_input("Password", type="password", key="r_pw")
+            r_pw2 = st.text_input("Confirm Password", type="password", key="r_pw2")
+            if st.button("Register"):
+                if not r_user or not r_email or not r_pw:
+                    st.warning("Fill all fields.")
+                elif r_pw != r_pw2:
+                    st.error("Passwords do not match.")
+                else:
+                    ok, msg = register_user(r_user.strip(), r_email.strip(), r_pw)
+                    if ok:
+                        st.success(msg + " Please login now.")
+                    else:
+                        st.error(msg)
+        else:
+            st.markdown("### Login")
+            l_user = st.text_input("Username or Email", key="l_user")
+            l_pw = st.text_input("Password", type="password", key="l_pw")
+            if st.button("Login"):
+                ok, info = login_user(l_user.strip(), l_pw)
+                if ok:
+                    st.session_state.user = info
+                    st.success(f"Welcome, {info['username']}!")
+                else:
+                    st.error(info)
+    else:
+        st.markdown(f"### Logged in as: **{st.session_state.user['username']}**")
+        if st.button("Logout"):
+            st.session_state.user = None
+            st.success("Logged out.")
+    st.markdown("---")
+    st.markdown("### Anime Clip")
+    # A gentle, safe sample video link (public YouTube). You can replace with any YouTube link.
+    st.video("https://www.youtube.com/watch?v=ysz5S6PUM-U")
+    st.markdown("---")
+    st.markdown("Created for fun ✨")
+
+# -------------------------
+# Main app UI: choose subject/category/difficulty & take quiz
+# -------------------------
+conn = get_conn()
+cur = conn.cursor()
+
+# fetch subjects, categories, difficulties from database
+cur.execute("SELECT DISTINCT subject FROM questions")
+subjects = [r[0] for r in cur.fetchall()] or ["General"]
+cur.execute("SELECT DISTINCT category FROM questions")
+categories = [r[0] for r in cur.fetchall()] or ["General"]
+cur.execute("SELECT DISTINCT difficulty FROM questions")
+difficulties = [r[0] for r in cur.fetchall()] or ["Easy", "Medium", "Hard"]
+
+conn.close()
+
+st.markdown("<div class='quiz-card'>", unsafe_allow_html=True)
+
+col1, col2 = st.columns([3,1])
+with col1:
+    st.header("Choose your quiz ⚙️")
+    selected_subject = st.selectbox("Subject", ["Any"] + subjects, key="selected_subject")
+    selected_category = st.selectbox("Category", ["Any"] + categories, key="selected_category")
+    selected_difficulty = st.selectbox("Difficulty", ["Any"] + difficulties, key="selected_difficulty")
+    num_questions = st.slider("Number of questions", 3, 15, 7)
+    time_limit_min = st.number_input("Time limit (minutes)", min_value=1, max_value=60, value=5)
+    st.markdown("")
+
+    if st.button("Start Quiz"):
+        # fetch questions according to filters
+        conn = get_conn()
+        cur = conn.cursor()
+        query = "SELECT id, subject, category, difficulty, question, choices, answer FROM questions WHERE 1=1"
+        params = []
+        if selected_subject != "Any":
+            query += " AND subject = ?"; params.append(selected_subject)
+        if selected_category != "Any":
+            query += " AND category = ?"; params.append(selected_category)
+        if selected_difficulty != "Any":
+            query += " AND difficulty = ?"; params.append(selected_difficulty)
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        conn.close()
+
+        if not rows:
+            st.warning("No questions match your filters. Try 'Any' or seed more questions.")
+        else:
+            # randomly pick questions
+            rows = random.sample(rows, min(num_questions, len(rows)))
+            # store quiz in session
+            st.session_state.quiz = {
+                "questions": rows,
+                "total": len(rows),
+                "subject": selected_subject,
+                "category": selected_category,
+                "difficulty": selected_difficulty,
+                "time_limit": int(time_limit_min * 60)  # seconds
+            }
+            st.session_state.answers = {}
+            st.session_state.start_time = time.time()
+            st.experimental_rerun()
+
+with col2:
+    st.header("Quick Info")
+    st.markdown(f"- **Logged in:** {'Yes' if st.session_state.user else 'No'}")
+    st.markdown(f"- **Subject:** {selected_subject}")
+    st.markdown(f"- **Category:** {selected_category}")
+    st.markdown(f"- **Difficulty:** {selected_difficulty}")
+    st.markdown(f"- **Num Qs:** {num_questions}")
+    st.markdown(f"- **Time limit:** {time_limit_min} min")
+    st.markdown("---")
+    st.markdown("Tip: register to save scores on the leaderboard!")
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# -------------------------
+# Quiz runner
+# -------------------------
+def run_quiz():
+    quiz = st.session_state.get("quiz", None)
+    if not quiz or "questions" not in quiz:
+        st.info("Start a quiz from the options above.")
+        return
+
+    elapsed = int(time.time() - st.session_state.start_time) if st.session_state.start_time else 0
+    remaining = quiz["time_limit"] - elapsed
+    if remaining < 0:
+        remaining = 0
+
+    minutes = remaining // 60
+    seconds = remaining % 60
+
+    st.markdown(f"**Time remaining:** ⏱️ {minutes:02d}:{seconds:02d}")
+
+    if remaining == 0:
+        st.warning("Time is up! Submitting automatically...")
+        submit_answers(auto=True)
+        return
+
+    # show questions one by one or all questions
+    qcols = st.columns(1)
+    with qcols[0]:
+        for idx, row in enumerate(quiz["questions"], start=1):
+            qid, subject, category, difficulty, question, choices, answer = row
+            st.markdown(f"<div class='question-box'><b>Q{idx}.</b> {question}  <small>({subject} | {category} | {difficulty})</small></div>", unsafe_allow_html=True)
+            opts = choices.split("|")
+            key = f"q_{qid}"
+            default = st.session_state.answers.get(key, None)
+            choice = st.radio("", opts, index=opts.index(default) if default in opts else 0, key=key, horizontal=False)
+            st.session_state.answers[key] = choice
+            st.markdown("---")
+
+    # action buttons
+    col_a, col_b = st.columns([1,1])
+    with col_a:
+        if st.button("Submit Quiz"):
+            submit_answers(auto=False)
+    with col_b:
+        if st.button("Reset Answers"):
+            st.session_state.answers = {}
+            st.experimental_rerun()
+
+def submit_answers(auto=False):
+    quiz = st.session_state.get("quiz", None)
+    if not quiz:
+        st.info("No active quiz.")
+        return
+    total = quiz["total"]
+    score = 0
+    correct_details = []
+    for row in quiz["questions"]:
+        qid = row[0]
+        correct = row[6]
+        key = f"q_{qid}"
+        user_ans = st.session_state.answers.get(key, "")
+        if user_ans == correct:
+            score += 1
+            correct_details.append((qid, True))
+        else:
+            correct_details.append((qid, False))
+    percentage = round((score / total) * 100, 2)
+    time_taken = time.time() - st.session_state.start_time if st.session_state.start_time else 0
+
+    # Save result if user logged in
+    if st.session_state.user:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO quiz_results (user_id, username, subject, category, difficulty, score, total_questions, percentage, time_taken, taken_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (st.session_state.user['id'], st.session_state.user['username'],
+              quiz['subject'], quiz['category'], quiz['difficulty'],
+              score, total, percentage, time_taken, datetime.utcnow().isoformat()))
         conn.commit()
         conn.close()
-        return True
-    except Exception as e:
-        st.error(f"Error saving result: {e}")
-        return False
-
-def get_user_results(user_id):
-    """Get user results - SIMPLIFIED"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT * FROM quiz_results 
-            WHERE user_id = ? 
-            ORDER BY created_at DESC
-        ''', (user_id,))
-        
-        results = cursor.fetchall()
-        conn.close()
-        
-        # Convert to list of dictionaries
-        columns = ['id', 'user_id', 'category', 'difficulty', 'score', 
-                  'total_questions', 'percentage', 'time_taken', 'created_at']
-        return [dict(zip(columns, row)) for row in results]
-    except Exception as e:
-        st.error(f"Error getting results: {e}")
-        return []
-
-def get_user_average_score(user_id):
-    """Get average score - SIMPLIFIED"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT AVG(percentage) FROM quiz_results WHERE user_id = ?
-        ''', (user_id,))
-        
-        result = cursor.fetchone()
-        conn.close()
-        return result[0] if result and result[0] else 0.0
-    except Exception as e:
-        return 0.0
-
-# Quiz questions database
-QUIZ_QUESTIONS = {
-    "Mathematics": {
-        "Easy": [
-            {
-                "question": "What is 2 + 2?",
-                "options": ["3", "4", "5", "6"],
-                "correct_answer": "4"
-            },
-            {
-                "question": "What is 5 × 3?",
-                "options": ["10", "15", "20", "25"],
-                "correct_answer": "15"
-            },
-            {
-                "question": "What is 10 ÷ 2?",
-                "options": ["2", "5", "10", "20"],
-                "correct_answer": "5"
-            }
-        ],
-        "Medium": [
-            {
-                "question": "What is 12 × 12?",
-                "options": ["121", "144", "132", "156"],
-                "correct_answer": "144"
-            },
-            {
-                "question": "What is 45 ÷ 9?",
-                "options": ["4", "5", "6", "7"],
-                "correct_answer": "5"
-            }
-        ],
-        "Hard": [
-            {
-                "question": "What is 15% of 200?",
-                "options": ["15", "20", "25", "30"],
-                "correct_answer": "30"
-            },
-            {
-                "question": "What is the square root of 169?",
-                "options": ["11", "12", "13", "14"],
-                "correct_answer": "13"
-            }
-        ]
-    },
-    "Science": {
-        "Easy": [
-            {
-                "question": "What planet is known as the Red Planet?",
-                "options": ["Venus", "Mars", "Jupiter", "Saturn"],
-                "correct_answer": "Mars"
-            },
-            {
-                "question": "What is H₂O?",
-                "options": ["Oxygen", "Hydrogen", "Water", "Carbon Dioxide"],
-                "correct_answer": "Water"
-            }
-        ],
-        "Medium": [
-            {
-                "question": "What is the chemical symbol for gold?",
-                "options": ["Go", "Gd", "Au", "Ag"],
-                "correct_answer": "Au"
-            }
-        ],
-        "Hard": [
-            {
-                "question": "What is the atomic number of carbon?",
-                "options": ["6", "8", "12", "14"],
-                "correct_answer": "6"
-            }
-        ]
-    },
-    "English": {
-        "Easy": [
-            {
-                "question": "Which word is a noun?",
-                "options": ["run", "beautiful", "quickly", "cat"],
-                "correct_answer": "cat"
-            }
-        ],
-        "Medium": [
-            {
-                "question": "What is a synonym for 'happy'?",
-                "options": ["sad", "joyful", "angry", "tired"],
-                "correct_answer": "joyful"
-            }
-        ],
-        "Hard": [
-            {
-                "question": "What is an oxymoron?",
-                "options": [
-                    "A figure of speech with contradictory terms",
-                    "A type of poem", 
-                    "A grammatical error",
-                    "A spelling mistake"
-                ],
-                "correct_answer": "A figure of speech with contradictory terms"
-            }
-        ]
-    },
-    "General Knowledge": {
-        "Easy": [
-            {
-                "question": "What is the capital of France?",
-                "options": ["London", "Berlin", "Paris", "Madrid"],
-                "correct_answer": "Paris"
-            }
-        ],
-        "Medium": [
-            {
-                "question": "Who wrote 'Romeo and Juliet'?",
-                "options": ["Charles Dickens", "William Shakespeare", "Jane Austen", "Mark Twain"],
-                "correct_answer": "William Shakespeare"
-            }
-        ],
-        "Hard": [
-            {
-                "question": "Who discovered penicillin?",
-                "options": ["Marie Curie", "Alexander Fleming", "Louis Pasteur", "Robert Koch"],
-                "correct_answer": "Alexander Fleming"
-            }
-        ]
-    }
-}
-
-def show_dashboard():
-    """Display the main dashboard"""
-    st.title("🎯 Your Learning Journey")
-    
-    # Initialize session state
-    if 'user_id' not in st.session_state:
-        st.session_state.user_id = str(uuid.uuid4())
-    
-    # User stats
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Total Quizzes")
-        user_results = get_user_results(st.session_state.user_id)
-        total_quizzes = len(user_results)
-        st.metric("Quizzes Taken", total_quizzes)
-    
-    with col2:
-        st.subheader("Average Score")
-        avg_score = get_user_average_score(st.session_state.user_id)
-        st.metric("Performance", f"{avg_score:.1f}%" if avg_score else "0%")
-    
-    st.markdown("---")
-    
-    # Start new quiz section
-    st.subheader("🚀 Start New Quiz")
-    st.write("Choose Your Challenge")
-    
-    # Category selection
-    cols = st.columns(4)
-    categories = ["Mathematics", "Science", "English", "General Knowledge"]
-    icons = ["🔢", "🔬", "📚", "🌍"]
-    
-    for i, (col, category, icon) in enumerate(zip(cols, categories, icons)):
-        with col:
-            if st.button(f"{icon}\n{category}", use_container_width=True, key=f"cat_{i}"):
-                st.session_state.selected_category = category
-                st.session_state.page = 'quiz'
-                st.rerun()
-    
-    st.markdown("---")
-    
-    # Recent performance
-    st.subheader("📈 Recent Performance")
-    
-    if user_results:
-        for result in user_results[:3]:  # Show last 3 results
-            with st.container():
-                col1, col2, col3 = st.columns([2, 1, 1])
-                
-                with col1:
-                    category = result.get('category', 'General')
-                    difficulty = result.get('difficulty', 'Medium')
-                    st.write(f"**{category}** - {difficulty}")
-                
-                with col2:
-                    score = result.get('score', 0)
-                    total = result.get('total_questions', 0)
-                    st.write(f"Score: {score}/{total}")
-                
-                with col3:
-                    percentage = result.get('percentage', 0)
-                    if percentage >= 80:
-                        st.success(f"{percentage:.1f}%")
-                    elif percentage >= 60:
-                        st.warning(f"{percentage:.1f}%")
-                    else:
-                        st.error(f"{percentage:.1f}%")
-                
-                st.divider()
+        st.success(f"Quiz submitted! Score saved. {score}/{total} ({percentage}%). Time: {int(time_taken)}s")
     else:
-        st.info("No quiz results yet. Take your first quiz to see your performance here!")
+        st.info(f"Quiz submitted! Score: {score}/{total} ({percentage}%). Time: {int(time_taken)}s — Register or login to save results.")
+    # show breakdown
+    st.markdown("### Results")
+    st.markdown(f"- Score: **{score} / {total}**")
+    st.markdown(f"- Percentage: **{percentage}%**")
+    st.markdown(f"- Time taken: **{int(time_taken)} seconds**")
+    # Reset quiz session (so they can start again)
+    st.session_state.quiz = {}
+    st.session_state.answers = {}
+    st.session_state.start_time = None
 
-def show_quiz():
-    """Display and manage the quiz"""
-    st.title("🧠 Quiz Time!")
-    
-    # Initialize quiz state
-    if 'current_question' not in st.session_state:
-        st.session_state.current_question = 0
-    if 'user_answers' not in st.session_state:
-        st.session_state.user_answers = []
-    if 'start_time' not in st.session_state:
-        st.session_state.start_time = time.time()
-    if 'selected_difficulty' not in st.session_state:
-        st.session_state.selected_difficulty = "Medium"
-    if 'selected_category' not in st.session_state:
-        st.session_state.selected_category = "Mathematics"
-    
-    # Category and difficulty selection at start
-    if st.session_state.current_question == 0 and len(st.session_state.user_answers) == 0:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            category = st.selectbox(
-                "Select Category",
-                ["Mathematics", "Science", "English", "General Knowledge"],
-                key="category_select"
-            )
-            st.session_state.selected_category = category
-        
-        with col2:
-            difficulty = st.selectbox(
-                "Select Difficulty",
-                ["Easy", "Medium", "Hard"],
-                key="difficulty_select"
-            )
-            st.session_state.selected_difficulty = difficulty
-        
-        if st.button("Start Quiz", type="primary"):
-            # Load questions
-            category = st.session_state.selected_category
-            difficulty = st.session_state.selected_difficulty
-            
-            if category in QUIZ_QUESTIONS and difficulty in QUIZ_QUESTIONS[category]:
-                st.session_state.quiz_questions = QUIZ_QUESTIONS[category][difficulty]
-                st.rerun()
-            else:
-                st.error("No questions available for this selection.")
-        
-        if st.button("← Back to Dashboard"):
-            st.session_state.page = 'dashboard'
-            st.rerun()
-        
-        return
-    
-    # Display current question
-    current_q = st.session_state.current_question
-    questions = st.session_state.quiz_questions
-    
-    if current_q < len(questions):
-        question_data = questions[current_q]
-        
-        st.subheader(f"Question {current_q + 1} of {len(questions)}")
-        st.write(f"**{question_data['question']}**")
-        
-        # Display options
-        user_answer = st.radio(
-            "Select your answer:",
-            question_data['options'],
-            key=f"q_{current_q}"
-        )
-        
-        col1, col2 = st.columns([1, 4])
-        
-        with col1:
-            if st.button("Next Question", type="primary"):
-                st.session_state.user_answers.append(user_answer)
-                st.session_state.current_question += 1
-                st.rerun()
-        
-        with col2:
-            if st.button("← Back to Dashboard"):
-                st.session_state.page = 'dashboard'
-                st.rerun()
-    
-    else:
-        # All questions answered - submit quiz
-        submit_quiz()
+# If quiz active, show runner
+if st.session_state.quiz and st.session_state.quiz.get("questions"):
+    st.markdown("<div class='quiz-card'>", unsafe_allow_html=True)
+    st.header("Take the Quiz")
+    run_quiz()
+    st.markdown("</div>", unsafe_allow_html=True)
 
-def submit_quiz():
-    """Calculate and display quiz results"""
-    try:
-        questions = st.session_state.quiz_questions
-        user_answers = st.session_state.user_answers
-        
-        # Calculate score
-        score = 0
-        for i, question in enumerate(questions):
-            if i < len(user_answers) and user_answers[i] == question['correct_answer']:
-                score += 1
-        
-        total_questions = len(questions)
-        percentage = (score / total_questions) * 100
-        time_taken = time.time() - st.session_state.start_time
-        
-        # Display results
-        st.subheader("🎊 Quiz Completed!")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Score", f"{score}/{total_questions}")
-        
-        with col2:
-            st.metric("Percentage", f"{percentage:.1f}%")
-        
-        with col3:
-            st.metric("Time Taken", f"{time_taken:.1f}s")
-        
-        # Performance message
-        if percentage >= 80:
-            st.success("🎉 Excellent work! You're a star!")
-        elif percentage >= 60:
-            st.warning("👍 Good job! Keep practicing!")
+# -------------------------
+# Admin: Add question (simple UI) & Leaderboard
+# -------------------------
+st.markdown("---")
+st.header("Extras")
+
+exp_col1, exp_col2 = st.columns(2)
+
+with exp_col1:
+    st.subheader("Add a Question (quick)")
+    q_subject = st.text_input("Subject", key="q_subject")
+    q_category = st.text_input("Category", key="q_category")
+    q_difficulty = st.selectbox("Difficulty", ["Easy","Medium","Hard"], key="q_diff")
+    q_text = st.text_area("Question text", key="q_text")
+    q_choices = st.text_input("Choices (separate by | )", key="q_choices", help="e.g. A|B|C|D")
+    q_answer = st.text_input("Correct answer (must match one choice)", key="q_answer")
+    if st.button("Add Question"):
+        if not q_subject or not q_text or not q_choices or not q_answer:
+            st.warning("Fill all fields.")
         else:
-            st.info("💪 Keep trying! You'll get better!")
-        
-        # Save to database
-        success = save_quiz_result(
-            st.session_state.user_id,
-            st.session_state.selected_category,
-            st.session_state.selected_difficulty,
-            score,
-            total_questions,
-            percentage,
-            time_taken
-        )
-        
-        if success:
-            st.success("✅ Results saved successfully!")
-        else:
-            st.warning("⚠️ Results not saved, but you can still see your score.")
-        
-        # Show review
-        st.markdown("---")
-        st.subheader("📋 Review Your Answers")
-        
-        for i, question in enumerate(questions):
-            user_answer = user_answers[i] if i < len(user_answers) else "Not answered"
-            correct = user_answer == question['correct_answer']
-            
-            st.write(f"**Q{i+1}: {question['question']}**")
-            st.write(f"Your answer: {user_answer}")
-            if correct:
-                st.success("✅ Correct!")
-            else:
-                st.error(f"❌ Correct answer: {question['correct_answer']}")
-            st.divider()
-        
-        # Navigation
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("🔄 Take Another Quiz", use_container_width=True):
-                reset_quiz_state()
-                st.rerun()
-        
-        with col2:
-            if st.button("📊 View Results", use_container_width=True):
-                st.session_state.page = 'results'
-                st.rerun()
-        
-        with col3:
-            if st.button("🏠 Dashboard", use_container_width=True):
-                st.session_state.page = 'dashboard'
-                st.rerun()
-                
-    except Exception as e:
-        st.error(f"Error in quiz submission: {e}")
-        if st.button("🏠 Back to Dashboard"):
-            st.session_state.page = 'dashboard'
-            st.rerun()
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("INSERT INTO questions (subject, category, difficulty, question, choices, answer) VALUES (?,?,?,?,?,?)",
+                        (q_subject, q_category or "General", q_difficulty, q_text, q_choices, q_answer))
+            conn.commit()
+            conn.close()
+            st.success("Question added!")
 
-def reset_quiz_state():
-    """Reset quiz state"""
-    st.session_state.current_question = 0
-    st.session_state.user_answers = []
-    st.session_state.start_time = time.time()
-    if 'quiz_questions' in st.session_state:
-        del st.session_state.quiz_questions
-
-def show_results():
-    """Display user's quiz results history"""
-    st.title("📊 My Quiz Results")
-    
-    # Get user results
-    results = get_user_results(st.session_state.user_id)
-    
-    if results:
-        st.subheader("Your Quiz History")
-        
-        for i, result in enumerate(results):
-            with st.expander(f"Quiz {i+1} - {result.get('category', 'General')} ({result.get('difficulty', 'Medium')})", expanded=i==0):
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.write("**Score**")
-                    st.write(f"{result.get('score', 0)}/{result.get('total_questions', 0)}")
-                
-                with col2:
-                    st.write("**Percentage**")
-                    percentage = result.get('percentage', 0)
-                    st.write(f"{percentage:.1f}%")
-                
-                with col3:
-                    st.write("**Time Taken**")
-                    st.write(f"{result.get('time_taken', 0):.1f}s")
-                
-                with col4:
-                    st.write("**Date**")
-                    created_at = result.get('created_at', '')
-                    st.write(created_at[:16] if created_at else 'N/A')
-        
-        # Statistics
-        st.markdown("---")
-        st.subheader("📈 Statistics")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Total Quizzes", len(results))
-        
-        with col2:
-            avg_score = get_user_average_score(st.session_state.user_id)
-            st.metric("Average Score", f"{avg_score:.1f}%")
-        
-        with col3:
-            best_score = max([r.get('percentage', 0) for r in results])
-            st.metric("Best Score", f"{best_score:.1f}%")
-    
+with exp_col2:
+    st.subheader("Leaderboard")
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT username, subject, category, difficulty, score, total_questions, percentage, time_taken, taken_at FROM quiz_results ORDER BY percentage DESC, score DESC LIMIT 10")
+    rows = cur.fetchall()
+    conn.close()
+    if rows:
+        df = pd.DataFrame(rows, columns=["User","Subject","Category","Difficulty","Score","Total","%","TimeTaken(s)","Taken At"])
+        st.dataframe(df)
     else:
-        st.info("No quiz results yet. Take a quiz to see your results here!")
-        
-        if st.button("Start Your First Quiz", type="primary"):
-            st.session_state.page = 'quiz'
-            st.rerun()
-    
-    # Navigation
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("🔄 Take Another Quiz", use_container_width=True):
-            st.session_state.page = 'quiz'
-            st.rerun()
-    
-    with col2:
-        if st.button("🏠 Dashboard", use_container_width=True):
-            st.session_state.page = 'dashboard'
-            st.rerun()
+        st.info("No results yet — take a quiz to appear here!")
 
-def main():
-    """Main application function"""
-    # Initialize page
-    if 'page' not in st.session_state:
-        st.session_state.page = 'dashboard'
-    
-    if 'user_id' not in st.session_state:
-        st.session_state.user_id = str(uuid.uuid4())
-    
-    # Page navigation
-    if st.session_state.page == 'dashboard':
-        show_dashboard()
-    elif st.session_state.page == 'quiz':
-        show_quiz()
-    elif st.session_state.page == 'results':
-        show_results()
+st.markdown("---")
+st.caption("Made with ❤️ — customize questions, styles, and embed your favorite anime clips!")
 
-if __name__ == "__main__":
-    main()
+# End of file
+
